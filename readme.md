@@ -95,10 +95,10 @@ Download the **Aquaplus Vocal Collection Vol. 4** in FLAC:
 khinsider.py aquaplus-vocal-collection-vol.4 -f flac
 ```
 
-Download **KH3 OST** in FLAC or MP3, plus album images, with verbose output:
+Download **Minecraft OST** in FLAC or MP3, plus album images, with verbose output:
 
 ```bash
-khinsider.py kh3-ost -f flac,mp3 -i -v
+khinsider.py minecraft -f flac,mp3 -i -v
 ```
 
 ---
@@ -325,7 +325,7 @@ khinsider.py <album-id-or-url>
 * **Download FLAC or MP3 + album images + verbose output**:
 
   ```bash
-  python3 khinsider.py kh3-ost -f flac,mp3 -i -v
+  python3 khinsider.py minecraft -f flac,mp3 -i -v
   ```
 
 ---

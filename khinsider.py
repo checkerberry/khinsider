@@ -26,8 +26,8 @@ Options:
 Examples:
     Download Aquaplus Vocal Collection Vol. 4 in FLAC:
         python khinsider.py --format flac "aquaplus-vocal-collection-vol.4"
-    Download KH3 OST in FLAC or MP3, plus images:
-        python khinsider.py kh3-ost -f flac,mp3 -i -v
+    Download Minecraft OST in FLAC or MP3, plus images:
+        python khinsider.py minecraft -f flac,mp3 -i -v
 
 Report issues: https://github.com/obskyr/khinsider/issues
 """
@@ -150,7 +150,7 @@ def get_soup(url: str, session: requests.Session) -> BeautifulSoup:
         data = _INVALID_ENTITY_RE.sub(b"&amp;#\\1", data)
         return BeautifulSoup(data, "html.parser")
     except requests.RequestException as e:
-        raise NetworkError(f"Failed to fetch {url}: {e}") from e
+        raise NetworkError(f"Failed to fetch {url}: {str(e)}") from e
 
 
 # ------------------------------------------------------------------------------
@@ -340,7 +340,7 @@ class Soundtrack:
         """
         if self._soup is None:
             self._soup = get_soup(self.url, self.session)
-            if self._soup.find(text="No such album"):
+            if self._soup.find(string="No such album"):
                 raise InvalidSoundtrackError(f"Album not found: {self.id}")
         return self._soup
 
@@ -381,7 +381,7 @@ class Soundtrack:
             except Exception as e:
                 success = False
                 if verbose:
-                    print(f"Error downloading track {idx}: {e}", file=sys.stderr)
+                    print(f"Error downloading track {idx}: {str(e)}", file=sys.stderr)
 
         # Download images if requested
         if download_images:
@@ -394,7 +394,7 @@ class Soundtrack:
                 except Exception as e:
                     success = False
                     if verbose:
-                        print(f"Error downloading image {idx}: {e}", file=sys.stderr)
+                        print(f"Error downloading image {idx}: {str(e)}", file=sys.stderr)
 
         return success
 
@@ -519,10 +519,10 @@ def main() -> None:
         print("\nDownload cancelled by user.", file=sys.stderr)
         sys.exit(1)
     except ScriptError as e:
-        print(f"\nError: {e}", file=sys.stderr)
+        print(f"\nError: {str(e)}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        print(f"\nUnexpected error: {e}", file=sys.stderr)
+        print(f"\nUnexpected error: {str(e)}", file=sys.stderr)
         sys.exit(1)
 
 
