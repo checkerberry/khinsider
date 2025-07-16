@@ -2,6 +2,8 @@
 
 A command-line and library interface for mass-downloading full game soundtracks (and optional album images) from [KHInsider](https://downloads.khinsider.com/). Built for Python 3.
 
+> **New to Python?** If you’ve never used Python before, [click here](#never-used-python-before) to get started.
+
 ---
 
 ## Features
@@ -214,6 +216,125 @@ def download(
   file = ost.songs[0].files[0]
   file.download(Path("myfile.mp3"))
   ```
+  
+## Never used Python before?
+
+If you’ve never used Python or the command line before, these steps will walk you through running the KHInsider Downloader on **Windows**, **macOS**, or **Linux**.
+
+### 1. Install Python
+
+- **Windows**  
+  1. Go to https://www.python.org/downloads/windows/  
+  2. Download the latest **“Windows installer (64-bit)”**.  
+  3. Run the installer, **check “Add Python to PATH”**, then click **Install Now**.
+
+- **macOS**  
+  1. Open **Terminal** (Finder → Applications → Utilities → Terminal).  
+  2. Check if Python is already installed:
+     ```bash
+     python3 --version
+     ```
+  3. If it’s not installed or you need a newer version, install via [Homebrew](https://brew.sh/):
+     ```bash
+     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+     brew install python
+     ```
+
+- **Linux**  
+  1. Open your terminal.  
+  2. Update your package list and install Python 3 and pip:
+     ```bash
+     # Debian/Ubuntu
+     sudo apt update && sudo apt install python3 python3-pip
+     
+     # Fedora
+     sudo dnf install python3 python3-pip
+     
+     # Arch
+     sudo pacman -S python python-pip
+     ```
+
+### 2. Open the Command Line / Terminal
+
+- **Windows**: Press Win+R, type `cmd`, and press Enter.  
+- **macOS**: Finder → Applications → Utilities → **Terminal**.  
+- **Linux**: Your desktop’s **Terminal** app (often Ctrl+Alt+T).
+
+### 3. Download the KHInsider Script
+
+1. In your terminal, choose (or create) a folder where you want the tool to live. For example:
+   ```bash
+   cd ~/Downloads
+   mkdir khinsider-tool && cd khinsider-tool
+    ````
+
+2. Clone the repository:
+
+   ```bash
+   git clone https://github.com/obskyr/khinsider.git
+   cd khinsider
+   ```
+
+> **No Git?**
+>
+> * **Windows/macOS**: Install from [https://git-scm.com/downloads](https://git-scm.com/downloads)
+> * **Linux**: `sudo apt install git` (or your distro’s equivalent)
+
+### 4. Install Dependencies
+
+Once inside the `khinsider` folder, run:
+
+```bash
+pip install --user -r requirements.txt
+```
+
+* The `--user` flag installs packages just for your user account (no need for administrator rights).
+
+### 5. Make the Script Executable (macOS/Linux)
+
+On **macOS** or **Linux**, you may need to give the script permission to run:
+
+```bash
+chmod +x khinsider.py
+```
+
+> **Windows users:** You can skip `chmod`; Windows will use the file association.
+
+### 6. Run the Downloader
+
+In the same terminal window, use:
+
+```bash
+# Basic usage: replace <album-id-or-url> with the soundtrack you want
+python3 khinsider.py <album-id-or-url>
+```
+
+Or, if you added the tool to your PATH (see Installation instructions above):
+
+```bash
+khinsider.py <album-id-or-url>
+```
+
+#### Examples
+
+* **Download in FLAC only**:
+
+  ```bash
+  python3 khinsider.py aquaplus-vocal-collection-vol.4 -f flac
+  ```
+* **Download FLAC or MP3 + album images + verbose output**:
+
+  ```bash
+  python3 khinsider.py kh3-ost -f flac,mp3 -i -v
+  ```
+
+---
+
+That’s it! If you hit any errors, double-check that:
+
+1. **Python 3.7+** is installed and on your PATH.
+2. You ran `pip install -r requirements.txt`.
+3. You’re in the right folder (`cd khinsider`).
 
 ## Support
 
