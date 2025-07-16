@@ -103,34 +103,44 @@ khinsider.py kh3-ost -f flac,mp3 -i -v
 
 ### Library Interface
 
-Use `khinsider.py` as a module in your own Python code:
+Use the core classes directly in your own code:
 
 ```python
 from pathlib import Path
-import khinsider
+import requests
+from khinsider import Soundtrack
 
-# Download audio only, default formats
-khinsider.download(
-    soundtrack_id="jumping-flash",
+# Create an HTTP session
+session = requests.Session()
+
+# Instantiate a Soundtrack by its ID (or URL segment)
+ost = Soundtrack("jumping-flash", session)
+
+# Download audio only (default formats)
+ost.download(
     output_dir=Path("Jumping Flash OST"),
     formats=None,
     download_images=False,
     verbose=True,
 )
 
-# Download MP3s and images
-khinsider.download(
-    soundtrack_id="mother-3",
-    output_dir=Path("Mother 3 Soundtrack"),
+# Download only MP3s plus album images
+ost.download(
+    output_dir=Path("Mother 3 OST"),
     formats=["mp3"],
     download_images=True,
     verbose=False,
 )
-```
+````
 
-#### API
+If you prefer a single‐function entry point, add this to your module:
 
 ```python
+import requests
+from khinsider import Soundtrack
+from pathlib import Path
+from typing import List, Optional
+
 def download(
     soundtrack_id: str,
     output_dir: Path,
@@ -138,21 +148,72 @@ def download(
     download_images: bool = False,
     verbose: bool = False
 ) -> bool:
-    """Download a KHInsider soundtrack and optional images.
+    """Convenience wrapper around Soundtrack.download()."""
+    session = requests.Session()
+    ost = Soundtrack(soundtrack_id, session)
+    return ost.download(output_dir, formats, download_images, verbose)
+```
 
-    Args:
-        soundtrack_id: ID or URL segment of the album.
-        output_dir: Directory to save files into.
-        formats: Preferred audio formats in descending priority.
-        download_images: If True, also download album images.
-        verbose: If True, print progress to stdout.
+Then call:
 
-    Returns:
-        True if all requested files succeeded, False otherwise.
-    """
+```python
+import khinsider
+from pathlib import Path
+
+khinsider.download(
+    "jumping-flash",
+    Path("Jumping Flash OST"),
+    formats=None,
+    download_images=False,
+    verbose=True,
+)
 ```
 
 ---
+
+### API
+
+#### `Soundtrack.download`
+
+```python
+def download(
+    self,
+    output_dir: Path,
+    formats: Optional[List[str]] = None,
+    download_images: bool = False,
+    verbose: bool = False
+) -> bool:
+    """Download all tracks and optional album images.
+
+    Args:
+        output_dir: Destination directory for files.
+        formats: List of preferred audio extensions (e.g., ['flac', 'mp3']); defaults to all.
+        download_images: If True, also download cover art and other images.
+        verbose: If True, print per-file progress and retry messages.
+
+    Returns:
+        True if all requested files succeeded, False otherwise.
+
+    Raises:
+        InvalidFormatError: If none of the requested audio formats are available.
+        OSError: If the output directory cannot be created.
+    """
+```
+
+#### `Song` and `AudioFile`
+
+* Use `Song` when you need per-track metadata:
+
+  ```python
+  for song in ost.songs:
+      print(song.name, [f.extension for f in song.files])
+  ```
+* Use `AudioFile` to inspect or download individual URLs:
+
+  ```python
+  file = ost.songs[0].files[0]
+  file.download(Path("myfile.mp3"))
+  ```
 
 ## Support
 
