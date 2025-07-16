@@ -154,22 +154,6 @@ def download(
 
 ---
 
-## Contributing
-
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for:
-
-* Bug reports and feature requests
-* Coding style and testing conventions
-* Pull request process
-
----
-
-## License
-
-This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
-
----
-
 ## Support
 
 * Report issues and request features on [GitHub Issues](https://github.com/obskyr/khinsider/issues).
