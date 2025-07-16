@@ -1,6 +1,6 @@
 # KHInsider Downloader
 
-A command-line and library interface for mass-downloading full game soundtracks (and optional album images) from [KHInsider](https://downloads.khinsider.com/). Built for Python 3 with best practices, Google-style documentation, and robust error handling.
+A command-line and library interface for mass-downloading full game soundtracks (and optional album images) from [KHInsider](https://downloads.khinsider.com/). Built for Python 3.
 
 ---
 
@@ -19,8 +19,8 @@ A command-line and library interface for mass-downloading full game soundtracks 
 ## Requirements
 
 - Python 3.7+
-- [requests](https://pypi.org/project/requests) 2.31.0 or later (< 3.0.0)
-- [beautifulsoup4](https://pypi.org/project/beautifulsoup4) 4.12.0 or later (< 5.0.0)
+- [requests](https://pypi.org/project/requests) 2.31.0 or later
+- [beautifulsoup4](https://pypi.org/project/beautifulsoup4) 4.12.0 or later
 
 Install dependencies with:
 
