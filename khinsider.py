@@ -1,61 +1,67 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-A script to download full soundtracks from KHInsider.
+"""Download full soundtracks from KHInsider.
 
-This script allows users to download entire music albums from KHInsider by 
+This script allows users to download entire music albums from KHInsider by
 specifying the album ID found in the website's URL. It supports multiple audio
-formats and includes error handling for network issues and invalid inputs.
+formats, optional album image download, and includes error handling for network
+issues and invalid inputs.
 
 Features:
-- Automatic directory creation with sanitized names
-- Format selection prioritization
-- Connection reuse for improved performance
-- Comprehensive error reporting
-
-Parameters:
-  soundtrack_id    Soundtrack ID from KHInsider URL (e.g. "minecraft", always the last string in the url: https://downloads.khinsider.com/game-soundtracks/album/minecraft <--)
-  -o, --output  Output directory (default: soundtrack name)
-  -f, --format  Preferred formats, comma-separated (e.g. "flac,mp3")
-  -v, --verbose Show detailed progress information
+  - Automatic directory creation with sanitized names
+  - Format selection prioritization
+  - Optional download of album images (e.g., cover art)
+  - Connection reuse for improved performance
+  - Comprehensive error reporting
 
 Usage:
-    python khinsider_downloader.py <soundtrack_id> [-o OUTPUT_DIR] [-f FORMATS] [-v]
+    python khinsider.py <soundtrack_id> [-o OUTPUT_DIR] [-f FORMATS] [-i] [-v]
+
+Options:
+  -o, --output    Output directory (default: sanitized album name)
+  -f, --format    Preferred formats, comma-separated (e.g. 'flac,mp3')
+  -i, --images    Download album images as well (e.g., cover art)
+  -v, --verbose   Show detailed progress output
 
 Examples:
-    Download aquaplus vocal collections volume 4 in flac:
-    >>> python khinsider_checkerberry.py --format flac "aquaplus-vocal-collection-vol.4"
-    
-    Download KH3 original soundtrack in MP3:
-    >>> python khinsider_checkerberry.py kh3-ost -f flac,mp3 -v
+    Download Aquaplus Vocal Collection Vol. 4 in FLAC:
+        python khinsider.py --format flac "aquaplus-vocal-collection-vol.4"
+    Download KH3 OST in FLAC or MP3, plus images:
+        python khinsider.py kh3-ost -f flac,mp3 -i -v
 
-.. codeauthor:: obskyr <contact@obskyr.io>
-.. modernized:: Checkerberry
+Report issues: https://github.com/obskyr/khinsider/issues
 """
 
-import argparse
 import os
 import re
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import List, Optional, Generator
+from typing import Generator, List, Optional
 from urllib.parse import unquote, urljoin
 
+import argparse
 import requests
 from bs4 import BeautifulSoup
 
-# Precompiled regex patterns for HTML preprocessing
-PRE_TD_RE = re.compile(br"^</td>\s*$", flags=re.MULTILINE)
-INVALID_ENTITY_RE = re.compile(br"&#([^0-9x]|x[^0-9A-Fa-f])")
-FILENAME_INVALID_RE = re.compile(r'[<>:"/\\|?*]')
+# ------------------------------------------------------------------------------
+# Constants
+# ------------------------------------------------------------------------------
 
-BASE_URL = 'https://downloads.khinsider.com/'
-SCRIPT_NAME = Path(sys.argv[0]).name
-REPORT_URL = "https://github.com/obskyr/khinsider/issues"
+BASE_URL = "https://downloads.khinsider.com/"
 MAX_RETRIES = 3
-CHUNK_SIZE = 65536  # 64KB chunks for download streaming
+CHUNK_SIZE = 64 * 1024  # 64KB
+REPORT_URL = "https://github.com/obskyr/khinsider/issues"
 
+# Precompiled regex patterns
+_PRE_TD_RE = re.compile(br"^</td>\s*$", flags=re.MULTILINE)
+_INVALID_ENTITY_RE = re.compile(br"&#([^0-9x]|x[^0-9A-Fa-f])")
+_FILENAME_INVALID_RE = re.compile(r'[<>:"/\\|?*]')
+
+
+# ------------------------------------------------------------------------------
+# Exceptions
+# ------------------------------------------------------------------------------
 
 class ScriptError(Exception):
     """Base exception for script-specific errors."""
@@ -66,436 +72,418 @@ class NetworkError(ScriptError):
 
 
 class InvalidSoundtrackError(ScriptError):
-    """Raised when requested soundtrack doesn't exist or is unavailable."""
+    """Raised when the requested soundtrack doesn't exist or is unavailable."""
 
 
 class InvalidFormatError(ScriptError):
     """Raised when none of the requested audio formats are available."""
 
 
+# ------------------------------------------------------------------------------
+# Utility Functions
+# ------------------------------------------------------------------------------
+
 @contextmanager
 def suppress_output() -> Generator[None, None, None]:
-    """Context manager to suppress all stdout/stderr output.
-    
+    """Suppress stdout and stderr temporarily.
+
     Yields:
-        None: No value yielded, used for context management
+        None
     """
-    with open(os.devnull, 'w') as null:
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
-        sys.stdout = null
-        sys.stderr = null
+    with open(os.devnull, "w") as null:
+        orig_stdout, orig_stderr = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = null, null
         try:
             yield
         finally:
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
+            sys.stdout, sys.stderr = orig_stdout, orig_stderr
 
 
 def sanitize_filename(name: str) -> str:
-    """Convert string to a valid filesystem filename.
-    
+    """Convert a string to a safe filesystem filename.
+
+    Invalid characters are replaced with hyphens, trailing spaces or dots are
+    removed, and Windows reserved names are suffixed with an underscore.
+
     Args:
-        name: Original filename to sanitize
-    
+        name: Original filename to sanitize.
+
     Returns:
-        Sanitized filename with invalid characters replaced
-    
-    Example:
+        Sanitized filename.
+
+    Examples:
         >>> sanitize_filename('A/B?C*.txt')
         'A-B-C-.txt'
     """
-    sanitized = FILENAME_INVALID_RE.sub('-', name).rstrip(' .')
-    reserved = {'', '.', '..', '~', 'CON', 'PRN', 'AUX', 'NUL'} | \
-        {f'COM{i}' for i in range(1, 10)} | \
-        {f'LPT{i}' for i in range(1, 10)}
-    
+    sanitized = _FILENAME_INVALID_RE.sub("-", name).rstrip(" .")
+    reserved = (
+        {"", ".", "..", "~", "CON", "PRN", "AUX", "NUL"}
+        | {f"COM{i}" for i in range(1, 10)}
+        | {f"LPT{i}" for i in range(1, 10)}
+    )
     if sanitized.upper() in reserved:
-        return f'{sanitized}_'
+        return f"{sanitized}_"
     return sanitized
 
 
 def get_soup(url: str, session: requests.Session) -> BeautifulSoup:
-    """Fetch and parse HTML content from URL using persistent session.
-    
+    """Fetch and parse HTML content from a URL using a persistent session.
+
+    Applies preprocessing to fix known HTML issues before parsing.
+
     Args:
-        url: URL to fetch content from
-        session: Requests session for connection reuse
-    
+        url: The URL to fetch.
+        session: Session object for HTTP requests.
+
     Returns:
-        BeautifulSoup object containing parsed HTML
-        
+        Parsed BeautifulSoup object.
+
     Raises:
-        NetworkError: If connection fails multiple times
+        NetworkError: If the request fails or returns a bad status.
     """
     try:
         with suppress_output():
             response = session.get(url, timeout=15)
             response.raise_for_status()
-            
-            # Preprocess HTML to fix common issues
-            content = response.content
-            content = PRE_TD_RE.sub(b'', content)
-            content = INVALID_ENTITY_RE.sub(b'&amp;#\\1', content)
-            
-            return BeautifulSoup(content, 'html.parser')
+        data = response.content
+        data = _PRE_TD_RE.sub(b"", data)
+        data = _INVALID_ENTITY_RE.sub(b"&amp;#\\1", data)
+        return BeautifulSoup(data, "html.parser")
     except requests.RequestException as e:
-        raise NetworkError(f"Network error: {e}") from e
+        raise NetworkError(f"Failed to fetch {url}: {e}") from e
 
 
-class Soundtrack:
-    """Represents a KHInsider soundtrack album with download capabilities.
-    
+# ------------------------------------------------------------------------------
+# Core Classes
+# ------------------------------------------------------------------------------
+
+
+class AudioFile:
+    """Metadata and download logic for a single file (audio or image).
+
+    Args:
+        url: Direct download URL.
+        session: Shared HTTP session.
+
     Attributes:
-        id (str): Soundtrack ID extracted from URL
-        url (str): Full URL to the album page
-        name (str): Sanitized official album name
-        formats (List[str]): Available audio formats (e.g., ['mp3', 'flac'])
-        songs (List[Song]): List of tracks in the album
-    
-    Example:
-        >>> with requests.Session() as session:
-        ...     ost = Soundtrack('kh2fm-soundtrack', session)
-        ...     print(ost.name)
-        Kingdom Hearts II FM Original Soundtrack
+        url: Download URL.
+        filename: Decoded filename from the URL.
+        extension: File extension (lowercase).
     """
-    
-    def __init__(self, soundtrack_id: str, session: requests.Session):
-        """Initialize soundtrack with ID and persistent session.
-        
-        Args:
-            soundtrack_id: Album ID from KHInsider URL
-            session: Shared requests session for HTTP connections
-        """
-        self.id = soundtrack_id
+
+    def __init__(self, url: str, session: requests.Session):
+        self.url = url
         self.session = session
-        self.url = urljoin(BASE_URL, f'game-soundtracks/album/{self.id}')
-        self._soup = None
-        self._name = None
-        self._formats = None
-        self._songs = None
+        self.filename = unquote(Path(url).name)
+        self.extension = Path(url).suffix.lstrip(".").lower()
+
+    def download(self, dest: Path) -> None:
+        """Stream the file to disk.
+
+        Args:
+            dest: Destination path.
+
+        Raises:
+            requests.RequestException: On network error.
+        """
+        resp = self.session.get(self.url, stream=True, timeout=30)
+        resp.raise_for_status()
+        with dest.open("wb") as f:
+            for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                if chunk:
+                    f.write(chunk)
+
+
+class Song:
+    """Represents a single track with multiple format options.
+
+    Args:
+        url: URL of the track detail page.
+        session: Shared HTTP session.
+    """
+
+    def __init__(self, url: str, session: requests.Session):
+        self.url = url
+        self.session = session
+        self._soup: Optional[BeautifulSoup] = None
+        self._name: Optional[str] = None
+        self._files: Optional[List[AudioFile]] = None
 
     @property
     def name(self) -> str:
-        """Get official soundtrack name with sanitization.
-        
-        Returns:
-            Safe-to-use filename string
-            
+        """Extract and sanitize the track name."""
+        if self._name is None:
+            soup = self._load_soup()
+            name_tag = soup.find_all("p")[2].find("b")
+            self._name = sanitize_filename(name_tag.get_text(strip=True))
+        return self._name
+
+    @property
+    def files(self) -> List[AudioFile]:
+        """List available audio format options."""
+        if self._files is None:
+            soup = self._load_soup()
+            pattern = re.compile(r"/(?:soundtracks|ost)/")
+            links = [a["href"] for a in soup.find_all("a", href=pattern)]
+            self._files = [
+                AudioFile(urljoin(self.url, link), self.session)
+                for link in links
+            ]
+        return self._files
+
+    def _load_soup(self) -> BeautifulSoup:
+        """Lazy-load and cache the BeautifulSoup for this track page.
+
         Raises:
-            InvalidSoundtrackError: If album page indicates missing content
+            InvalidSoundtrackError: If the page returns a 404-like title.
         """
-        if not self._name:
-            soup = self._get_content()
-            name_tag = soup.find('h2')
-            if not name_tag:
-                raise InvalidSoundtrackError(f"Invalid album page: {self.url}")
+        if self._soup is None:
+            self._soup = get_soup(self.url, self.session)
+            title_text = self._soup.find("title").get_text()
+            if "404" in title_text:
+                raise InvalidSoundtrackError(f"Track not found: {self.url}")
+        return self._soup
+
+
+class Soundtrack:
+    """Handles album metadata and bulk download operations.
+
+    Args:
+        soundtrack_id: Album ID from KHInsider URL.
+        session: Shared HTTP session.
+
+    Attributes:
+        id: Album identifier.
+        url: Full album page URL.
+    """
+
+    def __init__(self, soundtrack_id: str, session: requests.Session):
+        self.id = soundtrack_id
+        self.session = session
+        self.url = urljoin(BASE_URL, f"game-soundtracks/album/{self.id}")
+        self._soup: Optional[BeautifulSoup] = None
+        self._name: Optional[str] = None
+        self._formats: Optional[List[str]] = None
+        self._songs: Optional[List[Song]] = None
+        self._images: Optional[List[AudioFile]] = None
+
+    @property
+    def name(self) -> str:
+        """Get the official album name, sanitized for filesystem use.
+
+        Raises:
+            InvalidSoundtrackError: If the album page is invalid.
+        """
+        if self._name is None:
+            soup = self._get_page()
+            name_tag = soup.find("h2")
+            if name_tag is None:
+                raise InvalidSoundtrackError(f"Album page invalid: {self.url}")
             self._name = sanitize_filename(name_tag.get_text(strip=True))
         return self._name
 
     @property
     def formats(self) -> List[str]:
-        """Get available audio formats from album table headers.
-        
-        Returns:
-            List of lowercase format identifiers
-        """
-        if not self._formats:
-            soup = self._get_content()
-            table = soup.find('table', id='songlist')
-            if not table:
-                return ['mp3']  # Default to MP3 if no table found
-            
-            headers = [th.get_text(strip=True).lower() 
-                       for th in table.find_all('th')]
-            self._formats = [
-                h for h in headers 
-                if h not in {'track', 'song name', 'download', 'size'}
-            ] or ['mp3']
+        """List available audio formats (e.g., ['mp3', 'flac'])."""
+        if self._formats is None:
+            soup = self._get_page()
+            table = soup.find("table", id="songlist")
+            if table is None:
+                self._formats = ["mp3"]
+            else:
+                headers = [th.get_text(strip=True).lower()
+                           for th in table.find_all("th")]
+                self._formats = [
+                    h for h in headers
+                    if h not in {"track", "song name", "download", "size"}
+                ] or ["mp3"]
         return self._formats
 
     @property
-    def songs(self) -> List['Song']:
-        """Get list of Song objects from track links.
-        
-        Returns:
-            List of Song instances representing album tracks
-        """
-        if not self._songs:
-            soup = self._get_content()
-            table = soup.find('table', id='songlist')
-            links = [tr.find('a')['href'] 
-                     for tr in table.find_all('tr') if tr.find('a')]
+    def songs(self) -> List[Song]:
+        """List Song objects for each track in the album."""
+        if self._songs is None:
+            soup = self._get_page()
+            table = soup.find("table", id="songlist")
+            links = [
+                tr.find("a")["href"]
+                for tr in table.find_all("tr")
+                if tr.find("a")
+            ]
             self._songs = [
-                Song(urljoin(self.url, link), self.session) 
+                Song(urljoin(self.url, link), self.session)
                 for link in links
             ]
         return self._songs
 
-    def _get_content(self) -> BeautifulSoup:
-        """Lazy-load and validate album page content.
-        
-        Returns:
-            Parsed BeautifulSoup object of album page
-            
+    @property
+    def images(self) -> List[AudioFile]:
+        """List album image files available for download."""
+        if self._images is None:
+            soup = self._get_page()
+            table = soup.find("table")
+            anchors = [
+                a for a in table.find_all("a")
+                if a.find("img")
+            ] if table else []
+            self._images = [
+                AudioFile(urljoin(self.url, a["href"]), self.session)
+                for a in anchors
+            ]
+        return self._images
+
+    def _get_page(self) -> BeautifulSoup:
+        """Lazy-load and validate the album page HTML.
+
         Raises:
-            InvalidSoundtrackError: If page contains error messages
+            InvalidSoundtrackError: If the album is not found.
         """
-        if not self._soup:
+        if self._soup is None:
             self._soup = get_soup(self.url, self.session)
-            error_text = self._soup.find("No such album")
-            if error_text:
-                raise InvalidSoundtrackError(f"Album {self.id} not found")
+            if self._soup.find(text="No such album"):
+                raise InvalidSoundtrackError(f"Album not found: {self.id}")
         return self._soup
 
-    def download(
-        self,
-        output_dir: Path,
-        formats: Optional[List[str]] = None,
-        verbose: bool = False
-    ) -> bool:
-        """Download complete soundtrack with format prioritization.
-        
+    def download(self,
+                 output_dir: Path,
+                 formats: Optional[List[str]] = None,
+                 download_images: bool = False,
+                 verbose: bool = False) -> bool:
+        """Download the entire soundtrack and optionally album images.
+
         Args:
-            output_dir: Target directory for downloaded files
-            formats: Preferred formats in descending priority order
-            verbose: Enable detailed progress output
-            
+            output_dir: Directory to save tracks (and images) into.
+            formats: Preferred audio formats in priority order.
+            download_images: If True, also download album images.
+            verbose: If True, show per-file progress.
+
         Returns:
-            True if all tracks downloaded successfully
-            
+            True if all requested files downloaded successfully.
+
         Raises:
-            InvalidFormatError: If no requested formats are available
-            OSError: If directory creation fails
+            InvalidFormatError: If no requested audio formats are available.
+            OSError: If output directory creation fails.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
         if formats and not set(formats).intersection(self.formats):
-            raise InvalidFormatError(
-                f"Available formats: {', '.join(self.formats)}"
-            )
+            raise InvalidFormatError(f"Available formats: {', '.join(self.formats)}")
 
+        total_tracks = len(self.songs)
+        pad_tracks = len(str(total_tracks))
         success = True
-        total = len(self.songs)
-        pad = len(str(total))
 
-        for idx, song in enumerate(self.songs, 1):
+        # Download audio tracks
+        for idx, song in enumerate(self.songs, start=1):
             try:
-                file = self._select_best_file(song, formats or [])
-                if not self._download_file(
-                    file, 
-                    output_dir,
-                    idx,
-                    total,
-                    pad,
-                    verbose
-                ):
+                chosen = self._select_best(song, formats or [])
+                if not self._save_item(chosen, output_dir, idx, total_tracks, pad_tracks, verbose):
                     success = False
             except Exception as e:
-                if verbose:
-                    print(f"Error downloading song {idx}: {e}", file=sys.stderr)
                 success = False
+                if verbose:
+                    print(f"Error downloading track {idx}: {e}", file=sys.stderr)
+
+        # Download images if requested
+        if download_images:
+            total_imgs = len(self.images)
+            pad_imgs = len(str(total_imgs))
+            for idx, img in enumerate(self.images, start=1):
+                try:
+                    if not self._save_item(img, output_dir, idx, total_imgs, pad_imgs, verbose):
+                        success = False
+                except Exception as e:
+                    success = False
+                    if verbose:
+                        print(f"Error downloading image {idx}: {e}", file=sys.stderr)
 
         return success
 
-    def _select_best_file(self, song: 'Song', formats: List[str]) -> 'AudioFile':
-        """Select highest priority available format for a track.
-        
-        Args:
-            song: Track to select format from
-            formats: Ordered list of preferred formats
-            
-        Returns:
-            Best matching AudioFile instance
-        """
-        if not formats:
+    def _select_best(self, song: Song, prefs: List[str]) -> AudioFile:
+        """Choose the highest-priority available AudioFile for a song."""
+        if not prefs:
             return song.files[0]
-            
-        for fmt in formats:
-            fmt_lower = fmt.lower()
-            for file in song.files:
-                if file.extension == fmt_lower:
-                    return file
+        for fmt in prefs:
+            for f in song.files:
+                if f.extension == fmt.lower():
+                    return f
         return song.files[0]
 
-    def _download_file(
-        self,
-        file: 'AudioFile',
-        output_dir: Path,
-        current: int,
-        total: int,
-        pad: int,
-        verbose: bool
-    ) -> bool:
-        """Download individual track with retry logic.
-        
+    def _save_item(self,
+                   item: AudioFile,
+                   output_dir: Path,
+                   idx: int,
+                   total: int,
+                   pad: int,
+                   verbose: bool) -> bool:
+        """Download a single file with retry logic.
+
         Args:
-            file: AudioFile to download
-            output_dir: Target directory
-            current: Current track number
-            total: Total tracks to download
-            pad: String padding for progress display
-            verbose: Enable status output
-            
+            item: AudioFile object to download.
+            output_dir: Destination directory.
+            idx: Index of this file in its category.
+            total: Total number of files in its category.
+            pad: Width for zero-padding progress numbers.
+            verbose: If True, print progress messages.
+
         Returns:
-            True if download succeeded
+            True if download succeeded or was skipped.
         """
-        dest = output_dir / sanitize_filename(file.filename)
+        dest = output_dir / sanitize_filename(item.filename)
         if dest.exists():
             if verbose:
                 print(f"Skipping existing: {dest.name}")
             return True
 
         if verbose:
-            progress = f"[{current:0{pad}d}/{total}]"
-            print(f"{progress} Downloading {dest.name}...")
+            label = f"[{idx:0{pad}d}/{total}]"
+            print(f"{label} Downloading {dest.name}...")
 
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                file.download(dest)
+                item.download(dest)
                 return True
-            except requests.RequestException as e:
+            except requests.RequestException:
                 if verbose and attempt < MAX_RETRIES:
                     print(f"Retry {attempt}/{MAX_RETRIES} for {dest.name}")
         return False
 
 
-class Song:
-    """Represents a single track with multiple audio format options.
-    
-    Attributes:
-        url (str): URL of track's detail page
-        name (str): Sanitized track name
-        files (List[AudioFile]): Available audio format options
-    """
-    
-    def __init__(self, url: str, session: requests.Session):
-        """Initialize track with URL and shared session.
-        
-        Args:
-            url: Full URL to track's page
-            session: Reusable requests session
-        """
-        self.url = url
-        self.session = session
-        self._soup = None
-        self._name = None
-        self._files = None
+# ------------------------------------------------------------------------------
+# Main Entry Point
+# ------------------------------------------------------------------------------
 
-    @property
-    def name(self) -> str:
-        """Extract and sanitize track name from page content."""
-        if not self._name:
-            soup = self._get_soup()
-            name_tag = soup.find_all('p')[2].find('b')
-            self._name = sanitize_filename(name_tag.get_text(strip=True))
-        return self._name
-
-    @property
-    def files(self) -> List['AudioFile']:
-        """Extract available audio file links from page."""
-        if not self._files:
-            soup = self._get_soup()
-            pattern = re.compile(r'/(?:soundtracks|ost)/')
-            links = [a['href'] for a in soup.find_all('a', href=pattern)]
-            self._files = [
-                AudioFile(urljoin(self.url, link), self.session) 
-                for link in links
-            ]
-        return self._files
-
-    def _get_soup(self) -> BeautifulSoup:
-        """Fetch and validate track page content."""
-        if not self._soup:
-            self._soup = get_soup(self.url, self.session)
-            if '404' in self._soup.find('title').text:
-                raise InvalidSoundtrackError(f"Invalid track URL: {self.url}")
-        return self._soup
-
-
-class AudioFile:
-    """Represents a downloadable audio file with metadata.
-    
-    Attributes:
-        url (str): Direct download URL
-        filename (str): Original filename from URL
-        extension (str): Lowercase file extension
-    """
-    
-    def __init__(self, url: str, session: requests.Session):
-        """Initialize with download URL and session.
-        
-        Args:
-            url: Direct download URL
-            session: Shared requests session
-        """
-        self.url = url
-        self.session = session
-        self.filename = unquote(Path(url).name)
-        self.extension = Path(url).suffix[1:].lower()
-
-    def download(self, dest: Path) -> None:
-        """Stream file to disk with large chunk size.
-        
-        Args:
-            dest: Path to save file
-            
-        Raises:
-            requests.RequestException: For network errors
-        """
-        response = self.session.get(self.url, stream=True, timeout=30)
-        response.raise_for_status()
-        
-        with dest.open('wb') as f:
-            for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
-                if chunk:  # Filter out keep-alive chunks
-                    f.write(chunk)
-
-
-def main():
-    """
-    Command-line interface for KHInsider soundtrack downloads.
-
-    This script now spoofs a Chrome browser User-Agent and sets a Referer header
-    to avoid 403 Forbidden errors when fetching pages from KHInsider.
-
-    Usage:
-        python khinsider_checkerberry.py <soundtrack_id> [-o OUTPUT_DIR] [-f FORMATS] [-v]
-
-    Positional arguments:
-      soundtrack           Album ID from KHInsider URL
-                           (e.g. 'kh2fm-soundtrack' from
-                           https://downloads.khinsider.com/game-soundtracks/album/kh2fm-soundtrack)
-
-    Optional arguments:
-      -o, --output         Output directory (default: album name)
-      -f, --format         Preferred formats, comma-separated (e.g. 'flac,mp3')
-      -v, --verbose        Show detailed progress output
-    """
+def main() -> None:
+    """Parse CLI args, configure session, and download the soundtrack."""
     parser = argparse.ArgumentParser(
         description="Download KHInsider soundtracks (spoofing Chrome UA)",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=f"Report issues: {REPORT_URL}"
     )
     parser.add_argument(
-        'soundtrack',
+        "soundtrack",
         help=(
             "Album ID from KHInsider URL\n"
-            "(e.g. 'kh2fm-soundtrack' from\n"
+            "(e.g. 'kh2fm-soundtrack' from "
             "https://downloads.khinsider.com/game-soundtracks/album/kh2fm-soundtrack)"
         )
     )
     parser.add_argument(
-        '-o', '--output',
+        "-o", "--output",
         type=Path,
         help="Output directory (default: album name)"
     )
     parser.add_argument(
-        '-f', '--format',
-        help="Preferred formats, comma-separated (e.g. 'flac,mp3')"
+        "-f", "--format",
+        help="Preferred audio formats, comma-separated (e.g. 'flac,mp3')"
     )
     parser.add_argument(
-        '-v', '--verbose',
-        action='store_true',
+        "-i", "--images",
+        action="store_true",
+        help="Download album images as well (e.g., cover art)"
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
         help="Show detailed progress output"
     )
 
@@ -503,85 +491,40 @@ def main():
 
     try:
         with requests.Session() as session:
-            session.headers.update({ # Spoof Chrome and set Referer
-                'User-Agent': (
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/114.0.0.0 Safari/537.36'
+            session.headers.update({
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/114.0.0.0 Safari/537.36"
                 ),
-                'Referer': 'https://downloads.khinsider.com/'
+                "Referer": BASE_URL
             })
 
             ost = Soundtrack(args.soundtrack, session)
-            output_dir = args.output or Path(sanitize_filename(ost.name))
+            out_dir = args.output or Path(sanitize_filename(ost.name))
 
             if ost.download(
-                output_dir=output_dir,
-                formats=args.format.split(',') if args.format else None,
+                output_dir=out_dir,
+                formats=args.format.split(",") if args.format else None,
+                download_images=args.images,
                 verbose=args.verbose
             ):
                 print("\nDownload completed successfully!")
                 sys.exit(0)
-
-            print("\nDownload completed with errors!", file=sys.stderr)
-            sys.exit(1)
+            else:
+                print("\nDownload completed with some errors.", file=sys.stderr)
+                sys.exit(1)
 
     except KeyboardInterrupt:
-        print("\nDownload cancelled.", file=sys.stderr)
+        print("\nDownload cancelled by user.", file=sys.stderr)
         sys.exit(1)
-    except Exception as e:
+    except ScriptError as e:
         print(f"\nError: {e}", file=sys.stderr)
         sys.exit(1)
-
-    """Command-line interface for soundtrack downloads."""
-    parser = argparse.ArgumentParser(
-        description="Download KHInsider soundtracks",
-        formatter_class=argparse.RawTextHelpFormatter,
-        epilog=f"Report issues: {REPORT_URL}"
-    )
-    parser.add_argument(
-        'soundtrack',
-        help="Album ID from KHInsider URL\n(e.g. 'kh2fm-soundtrack' from\nhttps://downloads.khinsider.com/game-soundtracks/album/kh2fm-soundtrack)"
-    )
-    parser.add_argument(
-        '-o', '--output',
-        type=Path,
-        help="Output directory (default: album name)"
-    )
-    parser.add_argument(
-        '-f', '--format',
-        help="Preferred formats, comma-separated\n(e.g. 'flac,mp3')"
-    )
-    parser.add_argument(
-        '-v', '--verbose',
-        action='store_true',
-        help="Show detailed progress output"
-    )
-    
-    args = parser.parse_args()
-    
-    try:
-        with requests.Session() as session:
-            ost = Soundtrack(args.soundtrack, session)
-            output_dir = args.output or Path(sanitize_filename(ost.name))
-            
-            if ost.download(
-                output_dir=output_dir,
-                formats=args.format.split(',') if args.format else None,
-                verbose=args.verbose
-            ):
-                print("\nDownload completed successfully!")
-                sys.exit(0)
-            print("\nDownload completed with errors!", file=sys.stderr)
-            sys.exit(1)
-            
-    except KeyboardInterrupt:
-        print("\nDownload cancelled.", file=sys.stderr)
-        sys.exit(1)
     except Exception as e:
-        print(f"\nError: {e}", file=sys.stderr)
+        print(f"\nUnexpected error: {e}", file=sys.stderr)
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

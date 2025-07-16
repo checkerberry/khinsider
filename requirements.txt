@@ -1,0 +1,7 @@
+# requirements.txt — KHInsider downloader
+
+# HTTP client
+requests>=2.31.0,<3.0.0
+
+# HTML parsing
+beautifulsoup4>=4.12.0,<5.0.0

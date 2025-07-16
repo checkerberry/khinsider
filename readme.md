@@ -1,78 +1,176 @@
-# khinsider.py
+# KHInsider Downloader
 
-`khinsider.py` is a [Python](https://www.python.org/) interface and script for getting [khinsider](http://downloads.khinsider.com/) soundtracks. It makes khinsider mass downloads a breeze. It's easy to use - check it!
+A command-line and library interface for mass-downloading full game soundtracks (and optional album images) from [KHInsider](https://downloads.khinsider.com/). Built for Python 3 with best practices, Google-style documentation, and robust error handling.
 
-From the command line (i.e. regular usage):
+---
 
-```cmd
-khinsider.py jumping-flash
+## Features
+
+- Download entire soundtrack albums by ID or URL
+- Support for multiple audio formats (FLAC, MP3, etc.) with user-defined priority
+- **New**: Optional download of album images (cover art, booklet scans)
+- Automatic creation of sanitized output directories
+- HTTP connection reuse for performance
+- Retries on transient network failures
+- Comprehensive error reporting and exit codes
+
+---
+
+## Requirements
+
+- Python 3.7+
+- [requests](https://pypi.org/project/requests) 2.31.0 or later (< 3.0.0)
+- [beautifulsoup4](https://pypi.org/project/beautifulsoup4) 4.12.0 or later (< 5.0.0)
+
+Install dependencies with:
+
+```bash
+pip install -r requirements.txt
+````
+
+---
+
+## Installation
+
+Clone the repository or download the latest release ZIP:
+
+```bash
+git clone https://github.com/obskyr/khinsider.git
+cd khinsider
 ```
 
-As an import (for when you're programming):
+Ensure the script is executable:
 
-```python
-import khinsider
-khinsider.download('jumping-flash')
-# And bam, you've got the Jumping Flash soundtrack!
+```bash
+chmod +x khinsider.py
 ```
 
-For anime music, [check out `thehylia.py`](https://github.com/obskyr/thehylia).
+Optionally, install into your `$PATH`:
 
-Carefully put together by [@obskyr](http://twitter.com/obskyr)!
+```bash
+pip install .
+```
 
-### **[Download it here!](https://github.com/obskyr/khinsider/archive/master.zip)**
+---
 
 ## Usage
 
-Just run `khinsider.py` from the command line with the sole parameter being the soundtrack you want to download. You can either use the soundtrack's ID, or simply copy its entire URL. Easy!
+### Command-Line Interface
 
-If you want, you can also add another parameter as the output folder, but that's optional.
-
-You can also download other file formats (if available), like FLAC or OGG, as following:
-
-```cmd
-khinsider.py --format flac mother-3
+```bash
+khinsider.py <album-id-or-url> [OPTIONS]
 ```
 
-If you don't want to go to the actual site to look for soundtracks, you can also just type a search term as the first parameter(s), and provided it's not a valid soundtrack, `khinsider.py` will give you a list of soundtracks matching that term.
+**Positional arguments**
 
-You're going to need [Python](https://www.python.org/downloads/) (if you don't know which version to get, choose the latest version of Python 3 - `khinsider.py` works with both 2 and 3), so install that (and [add it to your path](http://superuser.com/a/143121)) if you haven't already.
+* `<album-id-or-url>`
+  The soundtrack identifier (e.g. `kh2fm-soundtrack`) or full URL.
 
-You will also need to have [pip](https://pip.readthedocs.org/en/latest/installing.html) installed (if you have Python 3, it is most likely already installed - otherwise, download `get-pip.py` and run it) if you don't already have [requests](https://pypi.python.org/pypi/requests) and [Beautiful Soup 4](https://pypi.python.org/pypi/beautifulsoup4). The first time `khinsider.py` runs, it will install these two for you.
+**Options**
 
-For more detailed information, try running `khinsider.py --help`!
+* `-o, --output DIR`
+  Output directory (default: sanitized album name).
+* `-f, --format FORMATS`
+  Comma-separated list of preferred audio formats, in priority order (e.g. `flac,mp3`).
+* `-i, --images`
+  Download album images (cover, booklet, etc.) in addition to audio.
+* `-v, --verbose`
+  Show detailed progress and retry messages.
+* `-h, --help`
+  Show usage information and exit.
 
-## As a module
+**Exit codes**
 
-`khinsider.py` requires two non-standard modules: [requests](https://pypi.python.org/pypi/requests) and [beautifulsoup4](https://pypi.python.org/pypi/beautifulsoup4). Just run a `pip install` on them (with [pip](https://pip.readthedocs.org/en/latest/installing.html)), or just run `khinsider.py` on its own once and it'll install them for you.
+* `0` All files downloaded successfully
+* `1` Completed with errors or unexpected exception
+* `2` Invalid arguments or help request
 
-Here are the main functions you will be using:
+#### Examples
 
-### `khinsider.download(soundtrackName[, path="", makeDirs=True, formatOrder=None, verbose=False])`
+Download the **Aquaplus Vocal Collection Vol. 4** in FLAC:
 
-Download the soundtrack `soundtrackName`. This should be the name the soundtrack uses at the end of its album URL.
+```bash
+khinsider.py aquaplus-vocal-collection-vol.4 -f flac
+```
 
-If `path` is specified, the soundtrack files will be downloaded to the directory that path points to.
+Download **KH3 OST** in FLAC or MP3, plus album images, with verbose output:
 
-If `makeDirs` is `True`, the directory will be created if it doesn't exist.
+```bash
+khinsider.py kh3-ost -f flac,mp3 -i -v
+```
 
-You can specify `formatOrder` to download soundtracks in specific formats. `formatOrder=['flac', 'mp3']`, for example, will download FLACs if available, and MP3s if not.
+---
 
-If `verbose` is `True`, it will print progress as it is downloading.
+### Library Interface
 
-### `khinsider.search(term)`
+Use `khinsider.py` as a module in your own Python code:
 
-Search khinsider for `term`. Return a list of `Soundtrack`s matching the search term. You can then access `soundtrack.id` or `soundtrack.url`.
+```python
+from pathlib import Path
+import khinsider
 
-### More
+# Download audio only, default formats
+khinsider.download(
+    soundtrack_id="jumping-flash",
+    output_dir=Path("Jumping Flash OST"),
+    formats=None,
+    download_images=False,
+    verbose=True,
+)
 
-There's a lot more detail to the API - more than would be sensible to write here. If you want to use `khinsider.py` as a module in a more advanced capacity, have a look at the `Soundtrack`, `Song`, and `File` objects in the source code! They're documented properly there for your reading pleasure.
+# Download MP3s and images
+khinsider.download(
+    soundtrack_id="mother-3",
+    output_dir=Path("Mother 3 Soundtrack"),
+    formats=["mp3"],
+    download_images=True,
+    verbose=False,
+)
+```
 
-# Talk to me!
+#### API
 
-You can easily get to me in these ways:
+```python
+def download(
+    soundtrack_id: str,
+    output_dir: Path,
+    formats: Optional[List[str]] = None,
+    download_images: bool = False,
+    verbose: bool = False
+) -> bool:
+    """Download a KHInsider soundtrack and optional images.
 
-* [@obskyr](http://twitter.com/obskyr/) on Twitter!
-* [E-mail](mailto:powpowd@gmail.com) me!
+    Args:
+        soundtrack_id: ID or URL segment of the album.
+        output_dir: Directory to save files into.
+        formats: Preferred audio formats in descending priority.
+        download_images: If True, also download album images.
+        verbose: If True, print progress to stdout.
 
-I'd love to hear it if you like `khinsider.py`! If there's a problem, or you'd like a new feature, submit an issue here on GitHub.
+    Returns:
+        True if all requested files succeeded, False otherwise.
+    """
+```
+
+---
+
+## Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for:
+
+* Bug reports and feature requests
+* Coding style and testing conventions
+* Pull request process
+
+---
+
+## License
+
+This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
+
+---
+
+## Support
+
+* Report issues and request features on [GitHub Issues](https://github.com/obskyr/khinsider/issues).
+* Reach out on Twitter [@obskyr](https://twitter.com/obskyr) or by email at [contact@obskyr.io](mailto:contact@obskyr.io).
