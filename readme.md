@@ -2,13 +2,16 @@
 
 `khinsider.py` is a [Python](https://www.python.org/) interface and script for getting [khinsider](http://downloads.khinsider.com/) soundtracks. It makes khinsider mass downloads a breeze. It's easy to use, check it!
 
-> **Zero-setup:** Just run the script, it auto-installs dependencies!
+> **Requires Python 3.9+**  
+> **Zero-setup:** Just run the script, it auto-installs dependencies!  
 > Set `KHI_NO_AUTO_INSTALL=1` to disable auto-install.
 
 ---
 
 ## Quick Start
 
+1) In your command line of choice, **Windows:** Command Prompt or PowerShell, **macOS:** Terminal, **Linux:** any terminal.
+2) In the **same folder as `khinsider.py`**:
 ```bash
 # Download by ID
 python khinsider.py plants-vs.-zombies
@@ -60,7 +63,7 @@ python khinsider.py <album-id-or-url> [options]
 
 ## “Never used Python before?”
 
-1. Install Python 3 from [https://www.python.org/downloads/](https://www.python.org/downloads/)
+1. Install the latest Python version from [https://www.python.org/downloads/](https://www.python.org/downloads/)
 2. Download this repo (or the single `khinsider.py` file)
 3. Run:
 
