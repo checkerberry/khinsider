@@ -35,11 +35,14 @@ Report issues: https://github.com/obskyr/khinsider/issues
 import os
 import re
 import sys
+import math
+import time
+import shutil
 import argparse
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator, List, Optional
+from typing import Generator, List, Optional, Callable
 import importlib.util
 from urllib.parse import unquote, urljoin
 from dataclasses import dataclass
@@ -277,7 +280,6 @@ def _soup_from_bytes(data: bytes) -> BeautifulSoup:
     with suppress_output():
         return BeautifulSoup(fixed, "html.parser")
 
-
 def extract_soundtrack_id(candidate: str) -> str:
     """Return a soundtrack ID from a user-supplied ID or album URL.
 
@@ -292,6 +294,173 @@ def extract_soundtrack_id(candidate: str) -> str:
     """
     m = _ALBUM_URL_RE.match(candidate.strip())
     return m.group(1) if m else candidate.strip()
+
+def _human_size(n: int) -> str:
+    """Return a human-readable size for bytes."""
+    units = ["B", "KB", "MB", "GB", "TB"]
+    size = float(n)
+    for u in units:
+        if size < 1024.0 or u == units[-1]:
+            return f"{size:.1f} {u}"
+        size /= 1024.0
+    return f"{size:.1f} TB"
+
+
+def _fmt_seconds(value: float) -> str:
+    """Return whole seconds with an 's' suffix (e.g., '62s')."""
+    return f"{int(max(0, math.ceil(value)))}s"
+
+class _ProgressBar:
+    """Simple progress bar with speed and ETA.
+
+    The bar renders to `sys.stdout` on TTYs using a single in-place line and
+    throttles updates to ~20 FPS. When the total size is unknown, it shows a
+    spinner with bytes transferred, transfer speed, and elapsed time. When the
+    total is known, it shows a filled bar, bytes done/total, percent, speed,
+    and ETA in seconds.
+
+    The instance is a callable: call it with the number of newly written bytes
+    to update the bar. Call :meth:`close` once per file to finalize output.
+
+    Attributes:
+      prefix: Text placed before the bar (typically a filename and index).
+      total: Total number of bytes expected, or None if unknown.
+      width: Character width of the bar body (inside the brackets).
+      n: Total number of bytes observed so far (monotonically increasing).
+      _start: Monotonic timestamp when the bar started (seconds).
+      _last_print: Monotonic timestamp of the last render (seconds).
+      _tty: True if `sys.stdout` is a TTY; disables rendering when False.
+      _last_len: Length of the last rendered line (used to clear leftovers).
+    """
+
+    def __init__(self, prefix: str, total: Optional[int], width: int = 28):
+        """Initialize a new progress bar.
+
+        Adjusts the prefix to fit the current terminal width, reserving space
+        for the bar and metrics. Rendering is automatically disabled when
+        `sys.stdout` is not a TTY.
+
+        Args:
+          prefix: Text to display before the bar (e.g., "[01/10] file.ext").
+          total: Expected total bytes for the transfer; None if unknown.
+          width: Width of the bar body (characters inside the brackets).
+        """
+        self.prefix = prefix
+        self.total = total
+        self.width = max(10, width)
+        self.n = 0
+        self._start = time.time()
+        self._last_print = 0.0
+        self._tty = sys.stdout.isatty()
+        self._last_len = 0
+
+        # Fit bar width to terminal if possible.
+        try:
+            cols = shutil.get_terminal_size(fallback=(80, 20)).columns
+        except Exception:
+            cols = 80
+        # Reserve room for metrics; trim prefix if needed.
+        reserve = 28 + self.width  # numbers + bar
+        if len(prefix) + 1 + reserve > cols:
+            trim_to = max(8, cols - reserve - 1)
+            if len(prefix) > trim_to:
+                self.prefix = prefix[: trim_to - 1] + "…"
+
+    def __call__(self, delta: int, total_hint: Optional[int] = None) -> None:
+        """Advance the bar by `delta` bytes and render if appropriate.
+
+        This method is typically used as a callback from the downloader. It
+        updates the internal byte count and triggers a redraw at most ~20 times
+        per second (or always on completion). If a `total_hint` is provided and
+        the bar was created with an unknown total, the hint is adopted.
+
+        Rendering is skipped when stdout is not a TTY, but counters are still
+        updated.
+
+        Args:
+          delta: Number of newly transferred bytes to add (non-negative).
+          total_hint: Optional total bytes discovered mid-transfer.
+
+        Raises:
+          ValueError: If `delta` is negative.
+        """
+        if total_hint and self.total is None:
+            self.total = total_hint
+        self.n += max(0, int(delta))
+
+        # Print at ~20 FPS max and on completion.
+        now = time.time()
+        if not self._tty:
+            return
+        if self.total is not None and self.n >= self.total:
+            self._render()
+            return
+        if now - self._last_print >= 0.05:
+            self._last_print = now
+            self._render()
+
+    def close(self) -> None:
+        """Finalize the bar and end the line.
+
+        Ensures a final render (useful for unknown totals), prints a newline so
+        subsequent output starts on a fresh line, and resets internal render
+        length bookkeeping.
+
+        This should be called exactly once per transfer that used the bar.
+        Calling it multiple times is harmless.
+        """
+        if self._tty:
+            self._render()
+            print("")  # newline
+            self._last_len = 0
+
+    def _render(self) -> None:
+        """Render the current bar state to stdout.
+
+        For known totals, shows a proportional bar, bytes done/total, percent,
+        speed (binary units per second), and ETA as whole seconds with an 's'
+        suffix. For unknown totals, shows a spinner with bytes done, speed, and
+        elapsed time as whole seconds prefixed with '+'.
+
+        The output is trimmed to the terminal width and padded with spaces to
+        overwrite any leftover characters from a longer previous render.
+
+        Args:
+          final: If True, forces a final render (e.g., at 100%) regardless of
+            throttle timing.
+        """
+        cols = shutil.get_terminal_size(fallback=(80, 20)).columns
+        elapsed = max(1e-9, time.time() - self._start)
+        speed = self.n / elapsed
+        speed_s = f"{_human_size(int(speed))}/s"
+
+        if self.total and self.total > 0:
+            pct = min(1.0, self.n / self.total)
+            filled = int(self.width * pct)
+            head = ">" if filled < self.width else ""
+            bar = "[" + "=" * filled + head + "." * (self.width - filled - len(head)) + "]"
+            done_s = _human_size(self.n)
+            total_s = _human_size(self.total)
+            remain = (self.total - self.n) / speed if speed > 0 else 0.0
+            eta_str = _fmt_seconds(remain)
+            line = (f"{self.prefix} {bar} {done_s}/{total_s} ({int(pct*100):3d}%) "
+                    f"{speed_s} ETA {eta_str}")
+        else:
+            spin = "|/-\\"
+            idx = int(time.time() * 10) % len(spin)
+            bar = f"[{spin[idx]}{' ' * (self.width - 1)}]"
+            done_s = _human_size(self.n)
+            elapsed_str = _fmt_seconds(elapsed)
+            line = f"{self.prefix} {bar} {done_s} {speed_s} +{elapsed_str}"
+
+        # Trim to terminal width
+        out = line[: max(0, cols - 1)]
+
+        # Clear any leftover chars from previous, longer render.
+        pad = " " * max(0, self._last_len - len(out))
+        print("\r" + out + pad, end="", flush=True)
+
+        self._last_len = len(out)
 
 
 # ------------------------------------------------------------------------------
@@ -318,21 +487,36 @@ class AudioFile:
         self.filename = unquote(Path(url).name)
         self.extension = Path(url).suffix.lstrip(".").lower()
 
-    def download(self, dest: Path) -> None:
+    def download(
+        self,
+        dest: Path,
+        progress: Optional[Callable[[int, Optional[int]], None]] = None,
+    ) -> None:
         """Stream the file to disk.
 
         Args:
             dest: Destination path.
+            progress: Optional callback receiving (delta_bytes, total_bytes).
 
         Raises:
             requests.RequestException: On network error.
         """
-        resp = self.session.get(self.url, stream=True, timeout=90)
+        resp = self.session.get(self.url, stream=True, timeout=30)
         resp.raise_for_status()
+        total: Optional[int] = None
+        length = resp.headers.get("Content-Length")
+        if length and length.isdigit():
+            total = int(length)
+
+        if progress:
+            progress(0, total)
+
         with dest.open("wb") as f:
             for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
                 if chunk:
                     f.write(chunk)
+                    if progress:
+                        progress(len(chunk), total)
 
 
 class Song:
@@ -551,13 +735,15 @@ class Soundtrack:
                     return f
         return song.files[0]
 
-    def _save_item(self,
-                   item: AudioFile,
-                   output_dir: Path,
-                   idx: int,
-                   total: int,
-                   pad: int,
-                   verbose: bool) -> bool:
+    def _save_item(
+        self,
+        item: AudioFile,
+        output_dir: Path,
+        idx: int,
+        total: int,
+        pad: int,
+        verbose: bool,
+    ) -> bool:
         """Download a single file with retry logic.
 
         Args:
@@ -574,20 +760,36 @@ class Soundtrack:
         dest = output_dir / sanitize_filename(item.filename)
         if dest.exists():
             if verbose:
-                print(f"Skipping existing: {dest.name}")
+                print(f"[{idx:0{pad}d}/{total}] Skipping existing: {dest.name}")
             return True
 
-        if verbose:
-            label = f"[{idx:0{pad}d}/{total}]"
-            print(f"{label} Downloading {dest.name}...")
+        label = f"[{idx:0{pad}d}/{total}] {dest.name}"
+
+        use_bar = verbose and sys.stdout.isatty()
+        bar: Optional[_ProgressBar] = _ProgressBar(prefix=label, total=None) if use_bar else None
+        if verbose and not use_bar:
+            print(f"{label} ...")
 
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                item.download(dest)
+                if bar:
+                    bar(0, None)
+                    item.download(dest, progress=bar)
+                    bar.close()
+                else:
+                    item.download(dest)
                 return True
             except requests.RequestException:
+                if bar:
+                    bar.close()  # ensure newline before retry message
                 if verbose and attempt < MAX_RETRIES:
                     print(f"Retry {attempt}/{MAX_RETRIES} for {dest.name}")
+                if bar:
+                    bar = _ProgressBar(prefix=label, total=None)
+            except Exception:
+                if bar:
+                    bar.close()
+                raise
         return False
 
 @dataclass(frozen=True)
